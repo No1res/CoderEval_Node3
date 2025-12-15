@@ -893,7 +893,7 @@ class SparseRetrievalContextBuilder:
                     hits.append(sym)
                     break
         # 去重并稳定排序
-        return sorted(set(hits)
+        return sorted(set(hits))
     def build_context(self, task: Dict, target_tokens: int) -> Tuple[str, Dict]:
         project = task.get('project', '')
         file_path = task.get('file_path', '')

@@ -47,6 +47,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from datetime import datetime
+import torch
+try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = None
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are an expert Python programmer. "
@@ -612,6 +617,8 @@ class RAGInferenceRunner:
         processed = 0
         
         attention_data_list = []
+
+        pbar = tqdm(total=total, desc=f"{self.config.method}-{context_length} infer", unit="task", dynamic_ncols=True) if tqdm else None
         
         with open(output_file, 'a', encoding='utf-8') as fw:
             # 按批次处理
@@ -670,10 +677,14 @@ class RAGInferenceRunner:
                         fw.write(json.dumps(result, ensure_ascii=False) + '\n')
                         processed += 1
                     fw.flush()
-                
+
+                if pbar:
+                    pbar.update(batch_end - batch_start)
+
                 if processed % (batch_size * 5) == 0:
                     logger.info(f"  进度: {processed}/{total}")
-        
+        if pbar:
+            pbar.close()
         # 保存注意力数据
         if attention_data_list:
             self._save_attention_data(attention_data_list, context_length)
@@ -684,14 +695,18 @@ class RAGInferenceRunner:
         processed = 0
         
         attention_data_list = []
-        
+
+        pbar = tqdm(total=total, desc=f"{self.config.method}-{context_length} infer", unit="task", dynamic_ncols=True) if tqdm else None
         with open(output_file, 'a', encoding='utf-8') as fw:
+
             for idx, task in enumerate(tasks):
                 task_id = task.get('_id', '')
                 processed += 1
-                
-                if processed % 10 == 0:
-                    logger.info(f"  进度: {processed}/{total}")
+                if pbar:
+                    pbar.update(1)
+
+                # if processed % 10 == 0:
+                #     logger.info(f"  进度: {processed}/{total}")
                 
                 try:
                     prompt = task.get('prompt', '')
@@ -754,7 +769,8 @@ class RAGInferenceRunner:
                             'retrieved_snippets': task.get('retrieved_snippets', []),
                             'attention': output['attention_data']
                         })
-                    
+                
+
                 except Exception as e:
                     logger.error(f"任务 {task_id} 推理失败: {e}")
                     result = {
@@ -766,7 +782,8 @@ class RAGInferenceRunner:
                     }
                     fw.write(json.dumps(result, ensure_ascii=False) + '\n')
                     fw.flush()
-        
+        if pbar:
+            pbar.close()
         if attention_data_list:
             self._save_attention_data(attention_data_list, context_length)
     
