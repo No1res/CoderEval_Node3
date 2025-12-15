@@ -48,6 +48,13 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from datetime import datetime
 
+DEFAULT_SYSTEM_PROMPT = (
+    "You are an expert Python programmer. "
+    "Complete the following function based on the given context. "
+    "Only output the function implementation, without any explanation."
+)
+
+
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
@@ -217,24 +224,34 @@ class RAGModelInference:
             raise
     
     def _build_prompt(self, user_prompt: str) -> str:
+
+
         """构建完整的 prompt（包括 chat template）"""
+
         messages = [
-            {"role": "user", "content": user_prompt}
-        ]
-        
-        if self.tokenizer and hasattr(self.tokenizer, 'apply_chat_template'):
+                {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ]
+
+        if self.tokenizer and hasattr(self.tokenizer, "apply_chat_template"):
             try:
                 text = self.tokenizer.apply_chat_template(
                     messages,
                     tokenize=False,
-                    add_generation_prompt=True
+                    add_generation_prompt=True,
                 )
                 return text
             except Exception as e:
-                logger.warning(f"apply_chat_template 失败: {e}")
-        
-        # 回退到简单格式
-        return f"<|im_start|>system\nYou are an expert Python programmer. Complete the following function based on the given context. Only output the function implementation.<|im_end|>\n<|im_start|>user\n{user_prompt}<|im_end|>\n<|im_start|>assistant\n"
+                logger.warning(f"apply_chat_template 失败，回退到手写模板: {e}")
+
+            # fallback：保持与 messages 一致（包含 system + user）
+        return (
+            "<|im_start|>system\n"
+            f"{DEFAULT_SYSTEM_PROMPT}<|im_end|>\n"
+            "<|im_start|>user\n"
+            f"{user_prompt}<|im_end|>\n"
+            "<|im_start|>assistant\n"
+    )
     
     def generate(self, prompt: str, num_samples: int = 1, 
                  return_attention: bool = False) -> Dict:
@@ -329,74 +346,71 @@ class RAGModelInference:
         
         return results
     
-    def _generate_transformers(self, prompt: str, num_samples: int, 
-                               return_attention: bool = False) -> Dict:
-        """使用 Transformers 生成"""
-        import torch
-        
+    def _generate_transformers(self, prompt: str, num_samples: int,
+                            return_attention: bool = False) -> Dict:
+        """Transformers 生成：只保存可回放材料（ids/raw），注意力统一后处理回放做。"""
+
         full_prompt = self._build_prompt(prompt)
-        inputs = self.tokenizer(full_prompt, return_tensors="pt").to(self.model.device)
-        
+
+        enc = self.tokenizer(full_prompt,return_tensors="pt",add_special_tokens=False)
+
+        enc = {k: v.to(self.model.device) for k, v in enc.items()}
+
+        prompt_input_ids = enc["input_ids"][0].tolist()
+        prompt_len_tokens = len(prompt_input_ids)
+
         generated_codes = []
-        attention_data = None
-        
+        generated_texts_raw = []
+        generated_token_ids = []   # 仅生成部分
+        sequence_token_ids = []    # prompt+生成
+
+        sample_seeds = []
+
         for i in range(num_samples):
+            sample_seed = int(self.config.seed + i)
+            sample_seeds.append(sample_seed)
+
+            # 让每个 sample 可复现
+            torch.manual_seed(sample_seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(sample_seed)
+
             with torch.no_grad():
-                if return_attention and i == 0:
-                    outputs = self.model.generate(
-                        **inputs,
-                        max_new_tokens=self.config.max_new_tokens,
-                        temperature=self.config.temperature,
-                        top_p=self.config.top_p,
-                        do_sample=True,
-                        pad_token_id=self.tokenizer.eos_token_id,
-                        output_attentions=True,
-                        return_dict_in_generate=True
-                    )
-                    
-                    if hasattr(outputs, 'attentions') and outputs.attentions:
-                        # outputs.attentions 结构: tuple of tuples
-                        # outputs.attentions[step][layer] = 第 step 步、第 layer 层的注意力
-                        # 形状: (batch, num_heads, seq_len, seq_len)
-                        try:
-                            # 取最后一个生成步骤的最后一层注意力
-                            last_step_attentions = outputs.attentions[-1]  # 最后一步所有层
-                            if isinstance(last_step_attentions, tuple):
-                                last_layer_attn = last_step_attentions[-1]  # 最后一层
-                            else:
-                                last_layer_attn = last_step_attentions
-                            
-                            if last_layer_attn is not None and hasattr(last_layer_attn, 'mean'):
-                                # 平均所有 attention heads: (batch, seq_len, seq_len)
-                                avg_attn = last_layer_attn.mean(dim=1).cpu().numpy()
-                                attention_data = {
-                                    'input_length': inputs['input_ids'].shape[1],
-                                    'avg_attention': avg_attn.tolist()
-                                }
-                        except Exception as e:
-                            logger.warning(f"提取注意力失败: {e}")
-                    
-                    generated_ids = outputs.sequences
-                else:
-                    outputs = self.model.generate(
-                        **inputs,
-                        max_new_tokens=self.config.max_new_tokens,
-                        temperature=self.config.temperature,
-                        top_p=self.config.top_p,
-                        do_sample=True,
-                        pad_token_id=self.tokenizer.eos_token_id
-                    )
-                    generated_ids = outputs
-            
-            generated = self.tokenizer.decode(
-                generated_ids[0][inputs['input_ids'].shape[1]:],
-                skip_special_tokens=True
-            )
-            generated_codes.append(self._extract_code(generated))
-        
+                outputs = self.model.generate(
+                    **enc,
+                    max_new_tokens=self.config.max_new_tokens,
+                    temperature=self.config.temperature,
+                    top_p=self.config.top_p,
+                    do_sample=True,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                    return_dict_in_generate=True,   # 关键：拿 sequences
+                    output_scores=False,
+                )
+
+            seq = outputs.sequences[0]
+            seq_ids = seq.tolist()
+            gen_ids = seq[prompt_len_tokens:].tolist()
+
+            sequence_token_ids.append(seq_ids)
+            generated_token_ids.append(gen_ids)
+
+            raw_text = self.tokenizer.decode(gen_ids, skip_special_tokens=True)
+            generated_texts_raw.append(raw_text)
+            generated_codes.append(self._extract_code(raw_text))
+
         return {
-            'generated_codes': generated_codes,
-            'attention_data': attention_data
+            "generated_codes": generated_codes,
+            "generated_texts_raw": generated_texts_raw,
+            "generated_token_ids": generated_token_ids,
+            "sequence_token_ids": sequence_token_ids,
+
+            "full_prompt": full_prompt,
+            "prompt_len_tokens": prompt_len_tokens,
+            "prompt_input_ids": prompt_input_ids,
+            "sample_seeds": sample_seeds,
+
+            # 彻底不再在 generate 阶段输出注意力
+            "attention_data": None,
         }
     
     def _generate_api(self, prompt: str, num_samples: int) -> Dict:
@@ -705,7 +719,29 @@ class RAGInferenceRunner:
                         'actual_tokens': task.get('actual_tokens', 0),
                         'num_retrieved': task.get('num_retrieved', 0),
                         'inference_time': elapsed,
-                        'generate_results': output['generated_codes']
+                        'generate_results': output['generated_codes'],
+
+                        # ---- 新增：回放式 forward 必需材料 ----
+                        "full_prompt": output.get("full_prompt"),
+                        "prompt_len_tokens": output.get("prompt_len_tokens"),
+                        "prompt_input_ids": output.get("prompt_input_ids"),
+
+                        "generated_texts_raw": output.get("generated_texts_raw"),
+                        "generated_token_ids": output.get("generated_token_ids"),
+                        "sequence_token_ids": output.get("sequence_token_ids"),
+
+                        "sample_seeds": output.get("sample_seeds"),
+
+                        "generation_config": {
+                            "backend": self.config.backend,
+                            "model_path": self.config.model_path,
+                            "model_name": self.config.model_name,
+                            "max_new_tokens": self.config.max_new_tokens,
+                            "temperature": self.config.temperature,
+                            "top_p": self.config.top_p,
+                            "num_samples": self.config.num_samples,
+                            "seed_base": self.config.seed,
+                        },
                     }
                     
                     fw.write(json.dumps(result, ensure_ascii=False) + '\n')

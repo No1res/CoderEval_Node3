@@ -38,6 +38,7 @@ from collections import defaultdict, Counter
 from datetime import datetime
 import hashlib
 import ast
+import heapq
 
 # 配置日志
 logging.basicConfig(
@@ -553,29 +554,33 @@ class BM25Retriever:
         
         return score
     
-    def retrieve(self, query: str, top_k: int = 100) -> List[Tuple[CodeSnippet, float]]:
+    def retrieve(self, query: str, top_k: Optional[int] = 100) -> List[Tuple[CodeSnippet, float]]:
         """检索最相关的代码片段"""
         if not self.indexed or self.corpus_size == 0:
             return []
-        
+
         query_tokens = self._tokenize(query)
-        
         if not query_tokens:
             return []
-        
+
         scores = []
         for idx in range(self.corpus_size):
             score = self._score(query_tokens, idx)
             if score > 0:
                 scores.append((idx, score))
-        
-        scores.sort(key=lambda x: x[1], reverse=True)
-        
-        results = []
-        for idx, score in scores[:top_k]:
-            results.append((self.snippets[idx], score))
-        
-        return results
+
+        if not scores:
+            return []
+
+        # top_k=None 或 top_k<=0 => 返回全部（仍需排序）
+        if top_k is None or top_k <= 0 or top_k >= len(scores):
+            scores.sort(key=lambda x: x[1], reverse=True)
+            return [(self.snippets[idx], score) for idx, score in scores]
+
+        # top_k 较小：只取最大的 top_k，避免全量 sort
+        top = heapq.nlargest(top_k, scores, key=lambda x: x[1])
+        top.sort(key=lambda x: x[1], reverse=True)
+        return [(self.snippets[idx], score) for idx, score in top]
     
     def _tokenize(self, text: str) -> List[str]:
         """分词"""
@@ -610,30 +615,34 @@ class JaccardRetriever:
         
         return intersection / union if union > 0 else 0.0
     
-    def retrieve(self, query: str, top_k: int = 100) -> List[Tuple[CodeSnippet, float]]:
-        """检索最相关的代码片段"""
+    def retrieve(self, query: str, top_k: Optional[int] = 100) -> List[Tuple[CodeSnippet, float]]:
+        """检索最相关的代码片段（Jaccard）"""
         if not self.indexed or not self.snippets:
             return []
-        
+
         query_tokens = self._tokenize(query)
         query_set = set(query_tokens)
-        
         if not query_set:
             return []
-        
-        scores = []
+
+        scores: List[Tuple[int, float]] = []
         for idx, token_set in enumerate(self.snippet_token_sets):
             similarity = self._jaccard_similarity(query_set, token_set)
             if similarity > 0:
                 scores.append((idx, similarity))
-        
-        scores.sort(key=lambda x: x[1], reverse=True)
-        
-        results = []
-        for idx, score in scores[:top_k]:
-            results.append((self.snippets[idx], score))
-        
-        return results
+
+        if not scores:
+            return []
+
+        # top_k=None 或 top_k<=0 => 返回全部（仍需排序）
+        if top_k is None or top_k <= 0 or top_k >= len(scores):
+            scores.sort(key=lambda x: x[1], reverse=True)
+            return [(self.snippets[idx], score) for idx, score in scores]
+
+        # top_k 较小：只取最大的 top_k，避免全量 sort
+        top = heapq.nlargest(top_k, scores, key=lambda x: x[1])
+        top.sort(key=lambda x: x[1], reverse=True)
+        return [(self.snippets[idx], score) for idx, score in top]
     
     def _tokenize(self, text: str) -> List[str]:
         """分词"""
@@ -927,6 +936,32 @@ class SparseRetrievalContextBuilder:
         query = self._build_query(task)
         retrieved = self.retriever.retrieve(query, top_k=500)
 
+        # ===== context scale stats (no index_size needed) =====
+        filtered_pool_size = len(filtered_snippets) if "filtered_snippets" in locals() else None
+
+        # retriever 内部索引规模（兼容 BM25/Jaccard）
+        retriever_index_size = getattr(self.retriever, "corpus_size", None)
+        if retriever_index_size is None and hasattr(self.retriever, "snippets"):
+            retriever_index_size = len(self.retriever.snippets)
+
+        retrieved_candidates = len(retrieved)
+
+        cand_token_counts = []
+        for snip, _score in retrieved:
+            tc = getattr(snip, "token_count", None)
+            if tc is not None:
+                cand_token_counts.append(int(tc))
+
+        avg_cand_tokens = (sum(cand_token_counts) / len(cand_token_counts)) if cand_token_counts else None
+        max_fillable_tokens_est = (retrieved_candidates * avg_cand_tokens) if avg_cand_tokens is not None else None
+
+        logger.info(
+            f"[ctx-stats] pool={filtered_pool_size} index={retriever_index_size} "
+            f"retrieved={retrieved_candidates} avail={available_tokens} "
+            f"avgCandTok={avg_cand_tokens} maxFillEst={max_fillable_tokens_est}"
+        )
+        
+
         func_signature = self._get_function_signature(task)
         signature_tokens = self._estimate_tokens(func_signature)
 
@@ -1085,37 +1120,77 @@ class SparseRetrievalContextBuilder:
                 'end_char': s['end_char_in_retrieved_context'] + retrieved_offset
             })
 
+        # metadata = {
+        #     'method': self.config.method,
+        #     'target_tokens': target_tokens,
+        #     'actual_tokens': self._estimate_tokens(full_context),
+        #     'num_retrieved': len(retrieved_info),
+
+        #     # 全量 meta（后续做 useful/冗余标注与 attention 聚合要用）
+        #     'retrieved_snippets': retrieved_info,
+
+        #     # 显式 span：你后面可以用 tokenizer offset mapping 映射到 token span
+        #     'snippet_char_spans': snippet_char_spans_full,
+        #         # ---- 新增：预算拆解与状态 ----
+        #     'prompt_overhead_tokens_est': prompt_overhead,
+        #     'signature_tokens_est': signature_tokens,
+        #     'available_tokens_est': available_tokens,
+        #     'budget_insufficient': budget_insufficient,
+        #     'budget_status': (
+        #         'ok' if not budget_insufficient
+        #         else 'insufficient_budget_for_retrieved_context'
+        #     ),
+
+        #     # 可选：方便排查为什么为 0
+        #     'budget_note': (
+        #         '' if not budget_insufficient
+        #         else f"target_tokens({target_tokens}) <= signature_tokens_est({signature_tokens}) + prompt_overhead_est({prompt_overhead})"
+        #     ),
+
+        #     'retrieved_snippets': retrieved_info,
+        #     'snippet_char_spans': snippet_char_spans_full,
+        #     'retrieved_snippets_preview': retrieved_info[:20],
+        # }
+
         metadata = {
-            'method': self.config.method,
-            'target_tokens': target_tokens,
-            'actual_tokens': self._estimate_tokens(full_context),
-            'num_retrieved': len(retrieved_info),
+            "method": self.config.method,
+            "target_tokens": target_tokens,
+            "actual_tokens": self._estimate_tokens(full_context),
+            "num_retrieved": len(retrieved_info),
 
             # 全量 meta（后续做 useful/冗余标注与 attention 聚合要用）
-            'retrieved_snippets': retrieved_info,
+            "retrieved_snippets": retrieved_info,
 
-            # 显式 span：你后面可以用 tokenizer offset mapping 映射到 token span
-            'snippet_char_spans': snippet_char_spans_full,
-                # ---- 新增：预算拆解与状态 ----
-            'prompt_overhead_tokens_est': prompt_overhead,
-            'signature_tokens_est': signature_tokens,
-            'available_tokens_est': available_tokens,
-            'budget_insufficient': budget_insufficient,
-            'budget_status': (
-                'ok' if not budget_insufficient
-                else 'insufficient_budget_for_retrieved_context'
+            # 显式 span：后面可用 tokenizer offset mapping 映射到 token span
+            "snippet_char_spans": snippet_char_spans_full,
+
+            # 预算拆解与状态（估算值）
+            "prompt_overhead_tokens_est": prompt_overhead,
+            "signature_tokens_est": signature_tokens,
+            "available_tokens_est": available_tokens,
+            "budget_insufficient": budget_insufficient,
+            "budget_status": (
+                "ok" if not budget_insufficient
+                else "insufficient_budget_for_retrieved_context"
             ),
-
-            # 可选：方便排查为什么为 0
-            'budget_note': (
-                '' if not budget_insufficient
+            "budget_note": (
+                "" if not budget_insufficient
                 else f"target_tokens({target_tokens}) <= signature_tokens_est({signature_tokens}) + prompt_overhead_est({prompt_overhead})"
             ),
 
-            'retrieved_snippets': retrieved_info,
-            'snippet_char_spans': snippet_char_spans_full,
-            'retrieved_snippets_preview': retrieved_info[:20],
+            "retrieved_snippets_preview": retrieved_info[:20],
         }
+
+        metadata["stats"] = {
+            "filtered_pool_size": filtered_pool_size,
+            "retriever_index_size": retriever_index_size,
+            "retrieved_candidates": retrieved_candidates,
+            "available_tokens_est": available_tokens,
+            "filled_tokens": current_tokens,
+            "avg_candidate_tokens": avg_cand_tokens,
+            "max_fillable_tokens_est": max_fillable_tokens_est,
+        }
+        
 
         return full_context, metadata
 
