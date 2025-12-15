@@ -20,13 +20,13 @@
 ## 🗂️ 文件结构
 
 ```
-CoderEval Docker/
+CoderEval_node3/
 ├── sparse_retrieval_context.py    # 稀疏检索上下文生成
 ├── rag_inference.py               # 模型推理
 ├── attention_analysis.py          # 注意力分析
 ├── rag_result_analysis.py         # 结果分析与可视化
 │
-├── rag_contexts/                  # 生成的上下文数据
+├── rag_contexts/                  # 生成的上下文数据(存放于本地)
 │   ├── rag_bm25_1024tokens.jsonl
 │   ├── rag_bm25_2048tokens.jsonl
 │   ├── ...
@@ -38,13 +38,6 @@ CoderEval Docker/
 │   ├── results_bm25_1024tokens.jsonl
 │   ├── ...
 │   └── inference_summary_*.json
-│
-├── attention_data/                # 注意力数据
-│   └── attention_*.json
-│
-├── attention_analysis_output/     # 注意力分析结果
-│   ├── attention_entropy_*.png
-│   └── ...
 │
 └── rag_analysis_output/           # 最终分析结果
     ├── comprehensive_analysis.png # 综合大图
@@ -58,7 +51,7 @@ CoderEval Docker/
 
 ### 第一步：生成稀疏检索上下文
 
-在**本地或有 repos 目录的环境**执行：
+在**本地或有 repos 目录的环境**执行(已经执行，结果产出于rag_contexts文件夹内，由于Github限制未放上来)：
 
 ```bash
 # BM25 方法
@@ -162,7 +155,7 @@ python rag_inference.py \
 python attention_analysis.py \
     --attention-dir ./attention_data \
     --rag-dir ./rag_contexts \
-    --dataset home/travis/builds/CoderEval4Python.json \
+    --dataset CoderEval4Python.json \
     --output ./attention_analysis_output \
     --method bm25 \
     --dpi 400
@@ -180,7 +173,7 @@ python attention_analysis.py \
 python rag_result_analysis.py \
     --results-dir ./rag_inference_results \
     --rag-dir ./rag_contexts \
-    --dataset home/travis/builds/CoderEval4Python.json \
+    --dataset CoderEval4Python.json \
     --output ./rag_analysis_output \
     --methods bm25 jaccard \
     --dpi 400
