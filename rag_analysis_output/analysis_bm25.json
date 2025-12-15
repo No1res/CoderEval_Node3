@@ -1,0 +1,174 @@
+{
+  "1024": {
+    "total_tasks": 230,
+    "pass@1": 12.608695652173912,
+    "pass@5": 25.995514147688066,
+    "pass@10": 26.956521739130434,
+    "by_level": {
+      "plib_runnable": {
+        "count": 21,
+        "pass@1": 11.904761904761903
+      },
+      "project_runnable": {
+        "count": 23,
+        "pass@1": 5.6521739130434785
+      },
+      "class_runnable": {
+        "count": 55,
+        "pass@1": 8.727272727272727
+      },
+      "self_contained": {
+        "count": 35,
+        "pass@1": 18.285714285714285
+      },
+      "file_runnable": {
+        "count": 68,
+        "pass@1": 11.176470588235293
+      },
+      "slib_runnable": {
+        "count": 28,
+        "pass@1": 22.857142857142858
+      }
+    }
+  },
+  "2048": {
+    "total_tasks": 230,
+    "pass@1": 12.391304347826088,
+    "pass@5": 25.709109730848862,
+    "pass@10": 26.521739130434785,
+    "by_level": {
+      "plib_runnable": {
+        "count": 21,
+        "pass@1": 12.85714285714286
+      },
+      "project_runnable": {
+        "count": 23,
+        "pass@1": 4.3478260869565215
+      },
+      "class_runnable": {
+        "count": 55,
+        "pass@1": 8.727272727272727
+      },
+      "self_contained": {
+        "count": 35,
+        "pass@1": 18.285714285714285
+      },
+      "file_runnable": {
+        "count": 68,
+        "pass@1": 11.176470588235295
+      },
+      "slib_runnable": {
+        "count": 28,
+        "pass@1": 21.428571428571427
+      }
+    }
+  },
+  "4096": {
+    "total_tasks": 230,
+    "pass@1": 14.26086956521739,
+    "pass@5": 29.26846100759144,
+    "pass@10": 30.0,
+    "by_level": {
+      "plib_runnable": {
+        "count": 21,
+        "pass@1": 11.904761904761903
+      },
+      "project_runnable": {
+        "count": 23,
+        "pass@1": 6.521739130434782
+      },
+      "class_runnable": {
+        "count": 55,
+        "pass@1": 11.090909090909092
+      },
+      "self_contained": {
+        "count": 35,
+        "pass@1": 20.0
+      },
+      "file_runnable": {
+        "count": 68,
+        "pass@1": 13.676470588235295
+      },
+      "slib_runnable": {
+        "count": 28,
+        "pass@1": 22.857142857142858
+      }
+    }
+  },
+  "8192": {
+    "total_tasks": 230,
+    "pass@1": 14.347826086956522,
+    "pass@5": 29.987922705314006,
+    "pass@10": 30.869565217391305,
+    "by_level": {
+      "plib_runnable": {
+        "count": 21,
+        "pass@1": 11.904761904761903
+      },
+      "project_runnable": {
+        "count": 23,
+        "pass@1": 4.3478260869565215
+      },
+      "class_runnable": {
+        "count": 55,
+        "pass@1": 12.0
+      },
+      "self_contained": {
+        "count": 35,
+        "pass@1": 20.285714285714285
+      },
+      "file_runnable": {
+        "count": 68,
+        "pass@1": 14.117647058823533
+      },
+      "slib_runnable": {
+        "count": 28,
+        "pass@1": 22.142857142857146
+      }
+    }
+  },
+  "16384": {
+    "total_tasks": 230,
+    "pass@1": 15.304347826086959,
+    "pass@5": 31.024844720496898,
+    "pass@10": 31.30434782608696,
+    "by_level": {
+      "plib_runnable": {
+        "count": 21,
+        "pass@1": 9.523809523809524
+      },
+      "project_runnable": {
+        "count": 23,
+        "pass@1": 8.26086956521739
+      },
+      "class_runnable": {
+        "count": 55,
+        "pass@1": 11.818181818181818
+      },
+      "self_contained": {
+        "count": 35,
+        "pass@1": 19.428571428571427
+      },
+      "file_runnable": {
+        "count": 68,
+        "pass@1": 16.617647058823533
+      },
+      "slib_runnable": {
+        "count": 28,
+        "pass@1": 23.92857142857143
+      }
+    }
+  },
+  "32768": {
+    "error": "No results"
+  },
+  "65536": {
+    "error": "No results"
+  },
+  "131072": {
+    "error": "No results"
+  },
+  "196608": {
+    "error": "No results"
+  }
+}

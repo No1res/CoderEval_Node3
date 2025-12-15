@@ -1,0 +1,76 @@
+{
+  "generated_at": "2025-12-08T13:56:52.631978",
+  "method": "bm25",
+  "dataset_path": "home/travis/builds/CoderEval4Python.json",
+  "total_tasks": 230,
+  "context_lengths": [
+    1024,
+    2048,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536,
+    131072,
+    196608
+  ],
+  "statistics": {
+    "1024": {
+      "total": 230,
+      "avg_actual_tokens": 921.7782608695652,
+      "avg_num_retrieved": 2.617391304347826
+    },
+    "2048": {
+      "total": 230,
+      "avg_actual_tokens": 1995.8391304347826,
+      "avg_num_retrieved": 5.073913043478261
+    },
+    "4096": {
+      "total": 230,
+      "avg_actual_tokens": 4152.647826086956,
+      "avg_num_retrieved": 10.834782608695653
+    },
+    "8192": {
+      "total": 230,
+      "avg_actual_tokens": 8414.173913043478,
+      "avg_num_retrieved": 22.043478260869566
+    },
+    "16384": {
+      "total": 230,
+      "avg_actual_tokens": 16251.817391304348,
+      "avg_num_retrieved": 43.00869565217391
+    },
+    "32768": {
+      "total": 230,
+      "avg_actual_tokens": 30865.430434782607,
+      "avg_num_retrieved": 81.79565217391304
+    },
+    "65536": {
+      "total": 230,
+      "avg_actual_tokens": 56785.821739130435,
+      "avg_num_retrieved": 162.7608695652174
+    },
+    "131072": {
+      "total": 230,
+      "avg_actual_tokens": 83596.02173913043,
+      "avg_num_retrieved": 267.89565217391305
+    },
+    "196608": {
+      "total": 230,
+      "avg_actual_tokens": 91614.39130434782,
+      "avg_num_retrieved": 291.8
+    }
+  },
+  "leakage_protection": {
+    "excluded_file_patterns": [
+      ".*passk_validte.*\\.py$",
+      ".*_passk_validate.*\\.py$",
+      ".*passk_validate.*\\.py$",
+      ".*_test\\.py$",
+      ".*test_.*\\.py$"
+    ],
+    "exclude_target_file": true,
+    "exclude_target_function": true,
+    "exclude_ground_truth_matches": true
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "completed_at": "2025-12-08T20:57:26.712240",
+  "model_name": "Qwen3-4B-Instruct-2507",
+  "retrieval_method": "jaccard",
+  "num_samples": 5,
+  "processed_lengths": [
+    1024,
+    2048,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536,
+    131072,
+    196608
+  ]
+}

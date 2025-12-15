@@ -1,0 +1,76 @@
+{
+  "generated_at": "2025-12-08T14:01:00.007383",
+  "method": "jaccard",
+  "dataset_path": "home/travis/builds/CoderEval4Python.json",
+  "total_tasks": 230,
+  "context_lengths": [
+    1024,
+    2048,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536,
+    131072,
+    196608
+  ],
+  "statistics": {
+    "1024": {
+      "total": 230,
+      "avg_actual_tokens": 1004.0739130434782,
+      "avg_num_retrieved": 5.569565217391304
+    },
+    "2048": {
+      "total": 230,
+      "avg_actual_tokens": 2173.391304347826,
+      "avg_num_retrieved": 11.234782608695653
+    },
+    "4096": {
+      "total": 230,
+      "avg_actual_tokens": 4440.113043478261,
+      "avg_num_retrieved": 20.756521739130434
+    },
+    "8192": {
+      "total": 230,
+      "avg_actual_tokens": 8908.243478260869,
+      "avg_num_retrieved": 38.84782608695652
+    },
+    "16384": {
+      "total": 230,
+      "avg_actual_tokens": 16990.513043478262,
+      "avg_num_retrieved": 67.81304347826087
+    },
+    "32768": {
+      "total": 230,
+      "avg_actual_tokens": 31815.85652173913,
+      "avg_num_retrieved": 113.5695652173913
+    },
+    "65536": {
+      "total": 230,
+      "avg_actual_tokens": 57685.421739130434,
+      "avg_num_retrieved": 192.80434782608697
+    },
+    "131072": {
+      "total": 230,
+      "avg_actual_tokens": 81676.4695652174,
+      "avg_num_retrieved": 277.995652173913
+    },
+    "196608": {
+      "total": 230,
+      "avg_actual_tokens": 86879.25652173912,
+      "avg_num_retrieved": 292.25652173913045
+    }
+  },
+  "leakage_protection": {
+    "excluded_file_patterns": [
+      ".*passk_validte.*\\.py$",
+      ".*_passk_validate.*\\.py$",
+      ".*passk_validate.*\\.py$",
+      ".*_test\\.py$",
+      ".*test_.*\\.py$"
+    ],
+    "exclude_target_file": true,
+    "exclude_target_function": true,
+    "exclude_ground_truth_matches": true
+  }
+}
