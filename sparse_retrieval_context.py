@@ -32,11 +32,12 @@ import math
 import argparse
 import logging
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Set
+from typing import Dict, List, Tuple, Optional, Set, Any
 from dataclasses import dataclass, field
 from collections import defaultdict, Counter
 from datetime import datetime
 import hashlib
+import ast
 
 # 配置日志
 logging.basicConfig(
@@ -699,35 +700,211 @@ class SparseRetrievalContextBuilder:
             signature += f'\n    """\n    {docstring}\n    """'
         
         return signature
-    
+
+
+    # ---- useful 标注：oracle + ground_truth（两者 OR）----
+
+    _PY_KEYWORDS = {
+        "False","None","True","and","as","assert","async","await","break","class","continue",
+        "def","del","elif","else","except","finally","for","from","global","if","import","in",
+        "is","lambda","nonlocal","not","or","pass","raise","return","try","while","with","yield",
+    }
+    _COMMON_BUILTINS = {
+        "abs","all","any","ascii","bin","bool","bytearray","bytes","callable","chr","classmethod",
+        "compile","complex","delattr","dict","dir","divmod","enumerate","eval","exec","filter",
+        "float","format","frozenset","getattr","globals","hasattr","hash","help","hex","id",
+        "input","int","isinstance","issubclass","iter","len","list","locals","map","max",
+        "memoryview","min","next","object","oct","open","ord","pow","print","property","range",
+        "repr","reversed","round","set","setattr","slice","sorted","staticmethod","str","sum",
+        "super","tuple","type","vars","zip",
+    }
+
+    def _safe_json_loads(self, s: str) -> Any:
+        try:
+            return json.loads(s)
+        except Exception:
+            return None
+
+    def _maybe_parse_listlike(self, v: Any) -> List[str]:
+        """
+        oracle_context 里经常出现：
+        - 真 list
+        - 字符串形式的 python list: "['a','b']"
+        - 空格分隔字符串: "typing errno os"
+        """
+        if v is None:
+            return []
+        if isinstance(v, list):
+            return [str(x) for x in v]
+        if isinstance(v, str):
+            txt = v.strip()
+            if not txt:
+                return []
+            # python list 形式
+            if (txt.startswith("[") and txt.endswith("]")) or (txt.startswith("(") and txt.endswith(")")):
+                try:
+                    parsed = ast.literal_eval(txt)
+                    if isinstance(parsed, (list, tuple, set)):
+                        return [str(x) for x in parsed]
+                except Exception:
+                    pass
+            # 否则按空白切分
+            return [t for t in re.split(r"\s+", txt) if t]
+        return [str(v)]
+
+    def _extract_oracle_symbols(self, task: Dict) -> Set[str]:
+        """
+        支持两类 oracle 格式：
+        1) {"apis": "...", "classes": "...", "vars": "..."}
+        2) {"import": "...", "file": "...", "class": "..."}  (你贴的 all_context 长这样，但有时也有人把它当 oracle 用)
+        我们只要能抽出 token 列表即可。
+        """
+        symbols: Set[str] = set()
+
+        oracle_raw = task.get("oracle_context", None)
+        if not oracle_raw:
+            return symbols
+
+        oracle_obj = oracle_raw
+        if isinstance(oracle_raw, str):
+            oracle_obj = self._safe_json_loads(oracle_raw)
+            if oracle_obj is None:
+                return symbols
+
+        if not isinstance(oracle_obj, dict):
+            return symbols
+
+        # 首选 apis/classes/vars
+        for k in ("apis", "classes", "vars"):
+            if k in oracle_obj:
+                for t in self._maybe_parse_listlike(oracle_obj.get(k)):
+                    tt = t.strip().strip("'").strip('"')
+                    if tt:
+                        symbols.add(tt)
+
+        # 兼容另一类字段命名
+        for k in ("import", "file", "class"):
+            if k in oracle_obj:
+                for t in self._maybe_parse_listlike(oracle_obj.get(k)):
+                    tt = t.strip().strip("'").strip('"')
+                    if tt:
+                        symbols.add(tt)
+
+        # 清理：去掉明显无意义/过短/关键字
+        cleaned = set()
+        for s in symbols:
+            if len(s) < 2:
+                continue
+            if s in self._PY_KEYWORDS:
+                continue
+            cleaned.add(s)
+        return cleaned
+
+    def _get_ground_truth_code(self, task: Dict) -> str:
+        # 你数据里有的叫 code，有的叫 ground_truth，这里自动兼容
+        gt = task.get("ground_truth", "") or task.get("code", "") or ""
+        return gt
+
+    def _extract_gt_symbols(self, task: Dict) -> Set[str]:
+        """
+        从 ground_truth 抽符号：
+        - import/from import 的名字
+        - 调用：foo(...), obj.bar(...)
+        - Name / Attribute
+        优先 AST，AST 失败则正则 fallback
+        """
+        gt = self._get_ground_truth_code(task)
+        if not gt.strip():
+            return set()
+
+        symbols: Set[str] = set()
+
+        # AST 优先
+        try:
+            tree = ast.parse(gt)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name:
+                            symbols.add(alias.name.split(".")[-1])
+                elif isinstance(node, ast.ImportFrom):
+                    for alias in node.names:
+                        if alias.name:
+                            symbols.add(alias.name)
+                elif isinstance(node, ast.Call):
+                    fn = node.func
+                    if isinstance(fn, ast.Name):
+                        symbols.add(fn.id)
+                    elif isinstance(fn, ast.Attribute):
+                        symbols.add(fn.attr)
+                elif isinstance(node, ast.Attribute):
+                    symbols.add(node.attr)
+                elif isinstance(node, ast.Name):
+                    symbols.add(node.id)
+        except Exception:
+            # Regex fallback：抓调用与属性
+            # foo( , obj.bar( , .attr
+            call_names = re.findall(r"\b([A-Za-z_]\w*)\s*\(", gt)
+            attr_names = re.findall(r"\.([A-Za-z_]\w*)\b", gt)
+            name_tokens = re.findall(r"\b([A-Za-z_]\w*)\b", gt)
+            for t in call_names + attr_names + name_tokens:
+                symbols.add(t)
+
+        # 过滤噪声
+        cleaned = set()
+        for s in symbols:
+            if len(s) < 2:
+                continue
+            if s in self._PY_KEYWORDS:
+                continue
+            # builtins 不必全丢，但很多任务会把这些当作“关键 API”（例如 divmod/map）
+            # 这里我不丢 builtins，只是保留，后面命中会更宽松
+            cleaned.add(s)
+        return cleaned
+
+    def _find_symbol_hits(self, text: str, symbols: Set[str]) -> List[str]:
+        """
+        在 snippet.content 里做“标识符边界”匹配，避免 Time 命中 Timestamp。
+        """
+        if not text or not symbols:
+            return []
+        hits = []
+        for sym in symbols:
+            # 对类似 "os.path" 的符号，既匹配整体也匹配最后段
+            candidates = {sym}
+            if "." in sym:
+                candidates.add(sym.split(".")[-1])
+
+            for c in candidates:
+                if not c or c in self._PY_KEYWORDS:
+                    continue
+                # 标识符边界：前后不是字母数字下划线
+                pat = rf"(?<![A-Za-z0-9_]){re.escape(c)}(?![A-Za-z0-9_])"
+                if re.search(pat, text):
+                    hits.append(sym)
+                    break
+        # 去重并稳定排序
+        return sorted(set(hits)
     def build_context(self, task: Dict, target_tokens: int) -> Tuple[str, Dict]:
-        """
-        为任务构建指定长度的上下文（防数据泄露版）
-        
-        Returns:
-            (context_str, metadata)
-        """
         project = task.get('project', '')
         file_path = task.get('file_path', '')
         target_func = task.get('name', '')
-        ground_truth = task.get('code', '')
-        
-        # 获取项目目录
+
+        # 关键：统一 ground_truth 入口（兼容不同数据字段命名）
+        ground_truth = task.get('ground_truth', '') or task.get('code', '') or ''
+
         project_dir = os.path.join(
             self.config.repos_path,
             project.replace('/', '---')
         )
-        
-        # 如果项目或目标文件改变，重新建立索引
+
         if self.current_project != project or self.current_exclude_file != file_path:
             if os.path.exists(project_dir):
-                # 提取代码片段，排除目标文件
                 snippets = self.extractor.extract_project_snippets(
-                    project_dir, 
+                    project_dir,
                     exclude_file=file_path
                 )
-                
-                # 进一步过滤：排除目标函数和包含 ground truth 的片段
+
                 filtered_snippets = []
                 for s in snippets:
                     if self.leakage_filter.should_exclude_snippet(
@@ -735,9 +912,9 @@ class SparseRetrievalContextBuilder:
                     ):
                         continue
                     filtered_snippets.append(s)
-                
+
                 logger.debug(f"过滤后剩余 {len(filtered_snippets)} 个片段（原 {len(snippets)}）")
-                
+
                 self.retriever.index(filtered_snippets)
                 self.current_project = project
                 self.current_exclude_file = file_path
@@ -746,78 +923,208 @@ class SparseRetrievalContextBuilder:
                 self.retriever.index([])
                 self.current_project = project
                 self.current_exclude_file = file_path
-        
-        # 构建查询
+
         query = self._build_query(task)
-        
-        # 检索
         retrieved = self.retriever.retrieve(query, top_k=500)
-        
-        # 获取函数签名
+
         func_signature = self._get_function_signature(task)
         signature_tokens = self._estimate_tokens(func_signature)
-        
+
         prompt_overhead = 200
-        available_tokens = target_tokens - signature_tokens - prompt_overhead
-        
-        # 逐步添加检索到的片段
-        context_parts = []
+        # 关键：防止出现负数
+        available_tokens = max(0, target_tokens - signature_tokens - prompt_overhead)
+        budget_insufficient = (available_tokens == 0)
+
+        # ---------------------------
+        # 构造“可对齐”的分段上下文
+        # ---------------------------
+        retrieved_context = ""
         current_tokens = 0
-        retrieved_info = []
-        
+
+        retrieved_info = []          # 全量（用于后续分析）
+        snippet_char_spans = []      # 每个 snippet 在 full_context 里的字符 span（后面会加偏移）
+
+        def _format_snip_block(idx: int, snippet, score: float, content: str, truncated: bool) -> str:
+            meta = {
+                "idx": idx,
+                "file": snippet.file_path,
+                "type": snippet.snippet_type,
+                "name": snippet.name,
+                "score": float(score),
+                "truncated": bool(truncated),
+            }
+            header = f"<<SNIP_META {json.dumps(meta, ensure_ascii=False)}>>\n"
+            footer = f"\n<<END_SNIP_{idx}>>"
+
+            body = f"# From: {snippet.file_path}\n{content}"
+            if truncated:
+                body += "\n# ... (truncated)"
+            return header + body + footer
+
+        snip_idx = 0
+
+        # useful 标注所需符号集合（你已经实现了这两个 helper）
+        oracle_syms = self._extract_oracle_symbols(task)
+        gt_syms = self._extract_gt_symbols(task)
+
         for snippet, score in retrieved:
-            # 再次检查防止泄露（双重保险）
             if self.leakage_filter.should_exclude_snippet(
                 snippet, target_func, file_path, ground_truth
             ):
                 continue
-            
+
             snippet_tokens = snippet.token_count
-            
+
+            # 判断是否需要截断
             if current_tokens + snippet_tokens > available_tokens:
                 remaining_tokens = available_tokens - current_tokens
                 if remaining_tokens > 50:
                     truncated_content = snippet.content[:remaining_tokens * 3]
                     if truncated_content.strip():
-                        context_parts.append(f"# From: {snippet.file_path}\n{truncated_content}\n# ... (truncated)")
+                        block = _format_snip_block(
+                            snip_idx, snippet, score, truncated_content, truncated=True
+                        )
+
+                        if retrieved_context:
+                            retrieved_context += "\n\n"
+                        start = len(retrieved_context)
+                        retrieved_context += block
+                        end = len(retrieved_context)
+
+                        # 截断内容上做命中（与实际喂给模型一致）
+                        oracle_hits = self._find_symbol_hits(truncated_content, oracle_syms)
+                        gt_hits = self._find_symbol_hits(truncated_content, gt_syms)
+                        hit_oracle = len(oracle_hits) > 0
+                        hit_gt = len(gt_hits) > 0
+                        useful_or = hit_oracle or hit_gt
+
                         retrieved_info.append({
+                            'idx': snip_idx,
                             'file': snippet.file_path,
                             'type': snippet.snippet_type,
                             'name': snippet.name,
                             'score': score,
-                            'truncated': True
+                            'truncated': True,
+                            'hit_oracle': hit_oracle,
+                            'hit_gt': hit_gt,
+                            'useful_or': useful_or,
+                            'oracle_hits': oracle_hits,
+                            'gt_hits': gt_hits,
+                            'oracle_hit_count': len(oracle_hits),
+                            'gt_hit_count': len(gt_hits),
                         })
+                        snippet_char_spans.append({
+                            'idx': snip_idx,
+                            'start_char_in_retrieved_context': start,
+                            'end_char_in_retrieved_context': end
+                        })
+                        snip_idx += 1
                 break
-            
-            context_parts.append(f"# From: {snippet.file_path}\n{snippet.content}")
+
+            # 不截断：完整加入
+            block = _format_snip_block(
+                snip_idx, snippet, score, snippet.content, truncated=False
+            )
+
+            if retrieved_context:
+                retrieved_context += "\n\n"
+            start = len(retrieved_context)
+            retrieved_context += block
+            end = len(retrieved_context)
+
             current_tokens += snippet_tokens
+
+            # 关键：不截断分支也打 useful 标注（字段结构一致）
+            oracle_hits = self._find_symbol_hits(snippet.content, oracle_syms)
+            gt_hits = self._find_symbol_hits(snippet.content, gt_syms)
+            hit_oracle = len(oracle_hits) > 0
+            hit_gt = len(gt_hits) > 0
+            useful_or = hit_oracle or hit_gt
+
             retrieved_info.append({
+                'idx': snip_idx,
                 'file': snippet.file_path,
                 'type': snippet.snippet_type,
                 'name': snippet.name,
                 'score': score,
-                'truncated': False
+                'truncated': False,
+                'hit_oracle': hit_oracle,
+                'hit_gt': hit_gt,
+                'useful_or': useful_or,
+                'oracle_hits': oracle_hits,
+                'gt_hits': gt_hits,
+                'oracle_hit_count': len(oracle_hits),
+                'gt_hit_count': len(gt_hits),
             })
-        
-        retrieved_context = '\n\n'.join(context_parts)
-        
-        full_context = f"""=== Retrieved Context ===
-{retrieved_context}
+            snippet_char_spans.append({
+                'idx': snip_idx,
+                'start_char_in_retrieved_context': start,
+                'end_char_in_retrieved_context': end
+            })
+            snip_idx += 1
 
-=== Target Function ===
-{func_signature}
-    # TODO: Implement this function
-"""
-        
+        # full_context 里 Retrieved Context 的前缀
+        retrieved_prefix = "=== Retrieved Context ===\n"
+        target_prefix = "\n\n=== Target Function ===\n"
+
+        full_context = (
+            f"{retrieved_prefix}"
+            f"{retrieved_context}"
+            f"{target_prefix}"
+            f"{func_signature}\n"
+            f"    # TODO: Implement this function\n"
+        )
+
+        # 把 retrieved_context 内的 char span 转成 full_context 内的 char span（加偏移）
+        retrieved_offset = len(retrieved_prefix)
+        snippet_char_spans_full = []
+        for s in snippet_char_spans:
+            snippet_char_spans_full.append({
+                'idx': s['idx'],
+                'start_char': s['start_char_in_retrieved_context'] + retrieved_offset,
+                'end_char': s['end_char_in_retrieved_context'] + retrieved_offset
+            })
+
         metadata = {
             'method': self.config.method,
             'target_tokens': target_tokens,
             'actual_tokens': self._estimate_tokens(full_context),
             'num_retrieved': len(retrieved_info),
-            'retrieved_snippets': retrieved_info[:20]
+
+            # 全量 meta（后续做 useful/冗余标注与 attention 聚合要用）
+            'retrieved_snippets': retrieved_info,
+
+            # 显式 span：你后面可以用 tokenizer offset mapping 映射到 token span
+            'snippet_char_spans': snippet_char_spans_full,
+                # ---- 新增：预算拆解与状态 ----
+            'prompt_overhead_tokens_est': prompt_overhead,
+            'signature_tokens_est': signature_tokens,
+            'available_tokens_est': available_tokens,
+            'budget_insufficient': budget_insufficient,
+            'budget_status': (
+                'ok' if not budget_insufficient
+                else 'insufficient_budget_for_retrieved_context'
+            ),
+
+            # 可选：方便排查为什么为 0
+            'budget_note': (
+                '' if not budget_insufficient
+                else f"target_tokens({target_tokens}) <= signature_tokens_est({signature_tokens}) + prompt_overhead_est({prompt_overhead})"
+            ),
+
+            'retrieved_snippets': retrieved_info,
+            'snippet_char_spans': snippet_char_spans_full,
+            'retrieved_snippets_preview': retrieved_info[:20],
         }
-        
+
         return full_context, metadata
+
+
+
+
+
+
+
 
 
 # ==================== 数据集生成器 ====================

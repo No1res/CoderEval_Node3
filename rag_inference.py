@@ -197,8 +197,6 @@ class RAGModelInference:
                 "device_map": "auto",
                 "trust_remote_code": True,
             }
-            
-            logger.info(f"  模型精度:{torch_dtype}")
 
             # 如果需要保存注意力，必须使用 eager attention 实现
             # SDPA (Scaled Dot Product Attention) 不支持 output_attentions
@@ -221,7 +219,6 @@ class RAGModelInference:
     def _build_prompt(self, user_prompt: str) -> str:
         """构建完整的 prompt（包括 chat template）"""
         messages = [
-            {"role": "system", "content": "You are an expert Python programmer. Complete the following function based on the given context. Only output the function implementation, without any explanation."},
             {"role": "user", "content": user_prompt}
         ]
         
